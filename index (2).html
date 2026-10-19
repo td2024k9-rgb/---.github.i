@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#171923">
+<title>ПВЗ Пульт — синхронизация сканера</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#eef0f6;background:#101218}
+*{box-sizing:border-box}body{margin:0}header{padding:22px max(16px,calc((100vw - 1000px)/2));background:#191c26;border-bottom:1px solid #303442}
+h1{font-size:clamp(23px,4vw,32px);margin:0 0 6px}header p,.muted{color:#aeb4c5;margin:0;font-size:14px}
+main{max-width:1000px;margin:22px auto;padding:0 16px 40px;display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr))}
+.card{background:#191c26;border:1px solid #303442;border-radius:16px;padding:18px;min-width:0}
+h2{font-size:18px;margin:0 0 14px}label{display:block;color:#c5cada;font-size:13px;margin:12px 0 6px}
+input,button{font:inherit;border-radius:10px;padding:12px;border:1px solid #3a4052}input{width:100%;background:#101218;color:#fff}
+button{cursor:pointer;background:#c4b5fd;color:#211b36;border:0;font-weight:700}button.secondary{background:#303546;color:#f0f2fa}button:disabled{opacity:.5;cursor:not-allowed}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.actions button{flex:1}
+.status{padding:10px 12px;border-radius:10px;background:#242938;color:#c8d0e3;font-size:13px;margin:12px 0}
+.status.ok{background:#14382d;color:#9af0c9}.status.err{background:#482326;color:#ffb7bb}
+#qr{background:#fff;border-radius:12px;padding:10px;display:inline-block;min-height:20px}
+#video{width:100%;max-height:340px;background:#050608;border-radius:12px;display:none;margin-top:12px}
+.bigcode{font-size:30px;font-weight:800;letter-spacing:5px;text-align:center;padding:10px}
+.item{padding:11px 0;border-bottom:1px solid #303442;overflow-wrap:anywhere}.item:last-child{border-bottom:0}
+.small{font-size:12px;color:#aeb4c5}.hidden{display:none!important}
+a{color:#c4b5fd}footer{max-width:1000px;padding:0 16px 30px;margin:auto;color:#aeb4c5;font-size:12px;line-height:1.5}
+</style>
+</head>
+<body>
+<header><h1>ПВЗ Пульт</h1><p>Синхронизация сканера телефона и рабочего места</p></header>
+<main>
+<section class="card" id="desk">
+<h2>Компьютер · рабочее место</h2>
+<p class="muted">Создай код сессии. На телефоне открой ссылку из QR-кода или введи код вручную.</p>
+<div id="deskStatus" class="status">Сначала укажи настройки Supabase в коде файла.</div>
+<div class="bigcode" id="roomDisplay">------</div>
+<div id="qrWrap" class="hidden"><div id="qr"></div><p class="small">Отсканируй этот QR обычной камерой телефона, затем разреши доступ к камере на открывшейся странице.</p></div>
+<div class="actions"><button id="newRoom" class="secondary">Создать новую сессию</button><button id="copyLink" class="secondary">Копировать ссылку</button></div>
+<label for="manualRoom">Или задай код сессии вручную</label>
+<input id="manualRoom" maxlength="12" placeholder="Например, 482731">
+<div class="actions"><button id="joinDesk">Подключить компьютер</button></div>
+<h2 style="margin-top:22px">Последние сканы</h2>
+<div id="scans"><p class="muted">Пока сканов нет.</p></div>
+</section>
+
+<section class="card" id="phone">
+<h2>Телефон · сканер</h2>
+<p class="muted">Открой эту же страницу на телефоне. Введи код с компьютера или перейди по QR-ссылке.</p>
+<div id="phoneStatus" class="status">Ожидает подключения.</div>
+<label for="roomInput">Код сессии</label>
+<input id="roomInput" maxlength="12" placeholder="6-12 символов">
+<div class="actions"><button id="joinPhone">Подключить сканер</button></div>
+<video id="video" playsinline muted></video>
+<div class="actions"><button id="startCamera">Включить камеру</button><button id="stopCamera" class="secondary" disabled>Остановить</button></div>
+<label for="manualBarcode">Резервный ввод штрихкода</label>
+<input id="manualBarcode" autocomplete="off" placeholder="Сканируй камерой или введи код">
+<div class="actions"><button id="sendManual">Отправить штрихкод</button></div>
+<p class="small">Если браузер не поддерживает распознавание, можно использовать ручной ввод или подключить библиотеку распознавания, например ZXing.</p>
+</section>
+</main>
+<footer>
+<strong>Важно:</strong> это демонстрационный прототип. Не передавай реальные персональные данные покупателей. Для реальной эксплуатации настрой приватные Realtime-каналы, авторизацию сотрудников, ограничение доступа и журналирование. Publishable key допустим во фронтенде только при корректно настроенных политиках доступа; секретные ключи сюда помещать нельзя.
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+<script>
+/*
+  1) Вставь Project URL и Publishable key из своего проекта Supabase.
+  2) Загрузи этот файл в GitHub-репозиторий как index.html.
+  3) В Supabase Realtime включи доступ к Broadcast для используемого тестового канала.
+  Не добавляй сюда service_role или sb_secret_ ключи.
+*/
+const SUPABASE_URL = "PASTE_YOUR_SUPABASE_PROJECT_URL_HERE";//postgres.wpfggvgnrrznsiqgqqpz:[YOUR-PASSWORD]@aws-1-eu-central-1.pooler.supabase.com:6543/postgres?pgbouncer=true"
+
+const SUPABASE_PUBLISHABLE_KEY = "PASTE_YOUR_SUPABASE_PUBLISHABLE_KEY_HERE";sb_publishable_ke5OQ78cHXdJfbrg9V72ww_dOEswdon
+
+const $ = (id) => document.getElementById(id);
+let supabaseClient = null, deskChannel = null, phoneChannel = null;
+let cameraStream = null, scanLoop = false, lastDetected = "", lastDetectedAt = 0;
+const isConfigured = SUPABASE_URL.startsWith("https://") &&
+  !SUPABASE_URL.includes("PASTE_") && SUPABASE_PUBLISHABLE_KEY &&
+  !SUPABASE_PUBLISHABLE_KEY.includes("PASTE_");
+
+if (isConfigured && window.supabase) {
+  supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+  $("deskStatus").textContent = "Настройки найдены. Создай сессию.";
+} else {
+  $("deskStatus").textContent = "Нужно вставить Project URL и Publishable key в начало JavaScript-кода файла.";
+  $("deskStatus").className = "status err";
+}
+function status(id, message, type="") { $(id).textContent = message; $(id).className = "status " + type; }
+function cleanRoom(v) { return (v || "").toUpperCase().replace(/[^A-Z0-9]/g,"").slice(0,12); }
+function randomRoom() { return String(Math.floor(100000 + Math.random()*900000)); }
+function channelName(room) { return "pvz-scan-" + room; }
+function scannerUrl(room) {
+  const u = new URL(window.location.href);
+  u.searchParams.set("mode","scanner"); u.searchParams.set("room",room);
+  return u.toString();
+}
+function setRoom(room) {
+  $("roomDisplay").textContent = room;
+  $("manualRoom").value = room;
+  $("roomInput").value = room;
+  $("qr").innerHTML = "";
+  $("qrWrap").classList.remove("hidden");
+  if (window.QRCode) new QRCode($("qr"), {text:scannerUrl(room), width:190, height:190});
+}
+function addScan(payload) {
+  const value = String(payload.code || "").trim();
+  if (!value) return;
+  const row = document.createElement("div"); row.className = "item";
+  const strong = document.createElement("strong"); strong.textContent = value;
+  const meta = document.createElement("div"); meta.className = "small";
+  meta.textContent = new Date(payload.at || Date.now()).toLocaleString() + " · " + (payload.source || "сканер");
+  row.append(strong,meta);
+  const list = $("scans");
+  if (list.querySelector(".muted")) list.innerHTML = "";
+  list.prepend(row);
+  while (list.children.length > 30) list.lastElementChild.remove();
+}
+async function leave(channel) {
+  if (channel && supabaseClient) await supabaseClient.removeChannel(channel);
+}
+async function connectDesk(room) {
+  if (!supabaseClient) return status("deskStatus","Сначала настрой Supabase в коде файла.","err");
+  room = cleanRoom(room);
+  if (room.length < 4) return status("deskStatus","Код должен содержать минимум 4 символа.","err");
+  await leave(deskChannel);
+  deskChannel = supabaseClient.channel(channelName(room), {config:{broadcast:{self:false}}});
+  deskChannel.on("broadcast",{event:"scan"},({payload})=>addScan(payload || {}));
+  deskChannel.subscribe((s)=>{
+    if(s==="SUBSCRIBED"){status("deskStatus","Компьютер подключён. Ожидаем сканы телефона.","ok");setRoom(room);}
+    else if(s==="CHANNEL_ERROR" || s==="TIMED_OUT") status("deskStatus","Не удалось подключиться. Проверь настройки Supabase и интернет.","err");
+  });
+}
+async function connectPhone(room) {
+  if (!supabaseClient) return status("phoneStatus","Сначала настрой Supabase в коде файла.","err");
+  room = cleanRoom(room);
+  if (room.length < 4) return status("phoneStatus","Введи корректный код сессии.","err");
+  await leave(phoneChannel);
+  phoneChannel = supabaseClient.channel(channelName(room), {config:{broadcast:{self:false}}});
+  phoneChannel.subscribe((s)=>{
+    if(s==="SUBSCRIBED") status("phoneStatus","Сканер подключён к сессии "+room+".","ok");
+    else if(s==="CHANNEL_ERROR" || s==="TIMED_OUT") status("phoneStatus","Не удалось подключиться. Проверь настройки Supabase и интернет.","err");
+  });
+}
+async function sendCode(code, source="ручной ввод") {
+  code = String(code || "").trim();
+  if (!code) return status("phoneStatus","Сначала отсканируй или введи штрихкод.","err");
+  if (!phoneChannel) return status("phoneStatus","Сначала подключи сканер к сессии.","err");
+  const result = await phoneChannel.send({type:"broadcast",event:"scan",payload:{code,source,at:new Date().toISOString()}});
+  if (result === "ok") {
+    status("phoneStatus","Отправлено: "+code,"ok");
+    $("manualBarcode").value = "";
+  } else status("phoneStatus","Не удалось отправить скан. Проверь соединение.","err");
+}
+$("newRoom").addEventListener("click",()=>{const r=randomRoom();setRoom(r);$("manualRoom").value=r;});
+$("joinDesk").addEventListener("click",()=>connectDesk($("manualRoom").value || $("roomDisplay").textContent));
+$("joinPhone").addEventListener("click",()=>connectPhone($("roomInput").value));
+$("copyLink").addEventListener("click",async()=>{
+  const r=cleanRoom($("roomDisplay").textContent);
+  if(r.length<4) return status("deskStatus","Сначала создай код сессии.","err");
+  try {await navigator.clipboard.writeText(scannerUrl(r));status("deskStatus","Ссылка скопирована.","ok");}
+  catch(e){status("deskStatus","Ссылка для телефона: "+scannerUrl(r));}
+});
+$("sendManual").addEventListener("click",()=>sendCode($("manualBarcode").value));
+$("manualBarcode").addEventListener("keydown",(e)=>{if(e.key==="Enter")sendCode($("manualBarcode").value);});
+
+async function startCamera() {
+  if (!phoneChannel) return status("phoneStatus","Сначала подключи сканер к сессии.","err");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return status("phoneStatus","Камера недоступна. Открой сайт по HTTPS в современном браузере.","err");
+  }
+  if (!("BarcodeDetector" in window)) {
+    return status("phoneStatus","В этом браузере нет встроенного распознавания штрихкодов. Используй ручной ввод или добавь ZXing.","err");
+  }
+  try {
+    const supported = await BarcodeDetector.getSupportedFormats();
+    const preferred = ["code_128","code_39","ean_13","ean_8","upc_a","upc_e","qr_code","itf","codabar"];
+    const formats = preferred.filter(x=>supported.includes(x));
+    const detector = new BarcodeDetector({formats});
+    cameraStream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"}},audio:false});
+    $("video").srcObject = cameraStream; $("video").style.display="block";
+    await $("video").play(); scanLoop = true; $("startCamera").disabled=true; $("stopCamera").disabled=false;
+    status("phoneStatus","Камера включена. Наведи её на штрихкод.","ok");
+    async function tick(){
+      if(!scanLoop) return;
+      try {
+        const codes = await detector.detect($("video"));
+        if(codes && codes.length){
+          const code = codes[0].rawValue, now=Date.now();
+          if(code && (code!==lastDetected || now-lastDetectedAt>1800)){
+            lastDetected=code;lastDetectedAt=now;await sendCode(code,"камера");
+          }
+        }
+      } catch(e) {}
+      if(scanLoop) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  } catch(e) {
+    status("phoneStatus","Не удалось запустить камеру. Разреши доступ к камере в браузере.","err");
+  }
+}
+function stopCamera(){
+  scanLoop=false;
+  if(cameraStream){cameraStream.getTracks().forEach(t=>t.stop());cameraStream=null;}
+  $("video").srcObject=null;$("video").style.display="none";
+  $("startCamera").disabled=false;$("stopCamera").disabled=true;
+}
+$("startCamera").addEventListener("click",startCamera);
+$("stopCamera").addEventListener("click",stopCamera);
+const params = new URLSearchParams(location.search);
+const roomParam = cleanRoom(params.get("room"));
+if(params.get("mode")==="scanner"){
+  $("desk").classList.add("hidden");
+  if(roomParam) $("roomInput").value=roomParam;
+} else {
+  $("phone").classList.add("hidden");
+  const r=randomRoom(); setRoom(r); $("manualRoom").value=r;
+}
+window.addEventListener("beforeunload",stopCamera);
+</script>
+</body>
+</html>
